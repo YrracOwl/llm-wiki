@@ -1,7 +1,7 @@
 ---
 name: llm-wiki
-description: "Karpathy's LLM Wiki — build and maintain a persistent, interlinked markdown knowledge base. Ingest sources, query compiled knowledge, and lint for consistency."
-version: 2.3.0
+description: "Karpathy's LLM Wiki — build and maintain a persistent, interlinked markdown knowledge base. Use when user asks to ingest sources, update the wiki, query compiled knowledge, lint for consistency, create a knowledge base, or add notes. All writes go through wiki_op.py unified CLI."
+version: 2.3.1
 author: Hermes Agent
 license: MIT
 metadata:
@@ -40,6 +40,8 @@ Use this skill when the user:
 - Asks a question and an existing wiki is present at the configured path
 - Asks to lint, audit, or health-check their wiki
 - References their wiki, knowledge base, or "notes" in a research context
+
+> ⚠️ **Line count**: This skill exceeds the 300-line target (~720 lines). This is intentional as a **domain knowledge skill** — the Ingest/Query/Lint operation flows, command templates, sync checklist, and schema templates are all **operational dependencies** the Agent needs at decision time, not "reference material" to be looked up separately. Removing them would add 3-5 `read_file` calls per operation, making every wiki interaction slower and more error-prone. The BM25 gate and write gate markers (🚨) ensure critical rules aren't buried.
 
 ## Wiki Location
 
@@ -90,7 +92,7 @@ wiki/
 **Layer 3 — The Schema:** `SCHEMA.md` defines structure, conventions, tag taxonomy, and all protocols.
 **Layer 4 — Skill Bridge:** `skills/_mapping.md` and `_aliases/entities.json` bridge wiki knowledge ↔ Hermes skills.
 
-## Resuming an Existing Wiki (CRITICAL — do this every session)
+## Resuming an Existing Wiki (CRITICAL — do this every session) ⚡
 
 When the user has an existing wiki, **always orient yourself before doing anything**:
 
@@ -129,7 +131,7 @@ bash ${SKILL_DIR:-~/.hermes/skills/research/llm-wiki}/scripts/init-wiki.sh [wiki
 ```
 
 This is the only supported bootstrap path — it ensures `wiki_op.py` and all modules are present
-at `${WIKI}/.hermes/scripts/`. The script handles idempotent re-runs (skip/sync-scripts/re-init).
+at `${WIKI}/.hermes/scripts/`. The script handles idempotent re-runs (skip / update-scripts / full re-init).
 
 **Manual fallback** (only if `init-wiki.sh` is unavailable):
 
@@ -288,6 +290,13 @@ python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py bridge ~/.hermes/skills/
 
 **Full Sync Checklist:**
 
+> ⚠️ **Pre-flight:** Before running any `wiki_op.py` commands below, verify the production wiki has the current scripts:
+> ```bash
+> # If wiki_op.py is old (missing subcommands like snapshot/stale/visits):
+> cp ${SKILL_DIR:-~/.hermes/skills/research/llm-wiki}/scripts/*.py ${WIKI_PATH:-~/wiki}/.hermes/scripts/
+> # Verify: wiki_op.py --help should show all 10 subcommands, not just create/update/delete/lint
+> ```
+
 | # | Step | Command / Action |
 |---|------|-----------------|
 | 1 | Snapshot | `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py snapshot <page>` |
@@ -318,6 +327,8 @@ python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py bridge ~/.hermes/skills/
 - Create a page without adding to `index.md`
 - Forget skill↔wiki bridge for new skills
 - Rely on memory instead of loading this skill
+- Modify skill scripts without deploying to production wiki before sync
+- Bypass wiki_op.py with raw `patch()`/`write_file()` on wiki pages
 
 ### 6. Cron Safety Net (定时安全网)
 
@@ -381,7 +392,21 @@ a `_meta/topic-map.md` that groups pages by theme for faster navigation.
 
 ## Core Operations
 
-### 1. Ingest
+🚨 **WRITE GATE — wiki_op.py is the ONLY path to wiki files (🤖 机械强制)**
+
+> All page creation, updates, and deletions MUST go through `wiki_op.py`.
+> **NEVER use `write_file`, `patch`, or any other tool directly on wiki `.md` files.**
+> `wiki_op.py` mechanically enforces: frontmatter completeness, index synchronization,
+> log entries, version snapshots, tag whitelist, wikilink validation, and line-number
+> corruption detection. Bypassing it = silent data corruption.
+>
+> Before any wiki write operation, verify the gate is available:
+> ```bash
+> python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py path
+> ```
+> If this fails → run `init-wiki.sh` first.
+
+### 1. Ingest ⚡
 
 When the user provides a source (URL, file, paste), integrate it into the wiki:
 
@@ -398,14 +423,48 @@ When the user provides a source (URL, file, paste), integrate it into the wiki:
    existing pages for mentioned entities/concepts. This is the difference between
    a growing wiki and a pile of duplicates.
 
-④ **Write or update wiki pages:**
+④ **Write or update wiki pages via `wiki_op.py` (🤖 强制):**
+
+   **Creating a new page:**
+   ```bash
+   # 1. Write body to temp file
+   cat > /tmp/wiki-draft.md << 'EOF'
+   # Page Title
+   Content here...
+   EOF
+   # 2. Create via wiki_op.py
+   python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py create \
+     --page entities/my-page --type entity --title "Page Title" \
+     --tags "tag1,tag2" --content-file /tmp/wiki-draft.md
+   ```
+
+   **Updating an existing page — surgical patch (preferred for small changes):**
+   ```bash
+   # Write patch as JSON
+   echo '{"old":"old text to replace","new":"new replacement text"}' > /tmp/wiki-patch.json
+   python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py update \
+     --page entities/my-page --patch-file /tmp/wiki-patch.json \
+     --change-summary "what changed and why"
+   ```
+
+   **Updating an existing page — full rewrite:**
+   ```bash
+   cat > /tmp/wiki-draft.md << 'EOF'
+   (full new page content, including YAML frontmatter)
+   EOF
+   python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py update \
+     --page entities/my-page --content-file /tmp/wiki-draft.md \
+     --change-summary "what changed and why"
+   ```
+
    - **New entities/concepts:** Create pages only if they meet the Page Thresholds
-     in SCHEMA.md (2+ source mentions, or central to one source)
+     in SCHEMA.md (2+ source mentions, or central to one source). Use `wiki_op.py create`.
    - **Existing pages:** Add new information, update facts, bump `updated` date.
      When new info contradicts existing content, follow the Update Policy.
+     Use `wiki_op.py update --patch-file` for small changes, `--content-file` for rewrites.
    - **Cross-reference:** Every new or updated page must link to at least 2 other
      pages via `[[wikilinks]]`. Check that existing pages link back.
-   - **Tags:** Only use tags from the taxonomy in SCHEMA.md
+   - **Tags:** Only use tags from the taxonomy in SCHEMA.md. `wiki_op.py create` validates this.
 
 ⑤ **Update navigation:**
    - Add new pages to `index.md` under the correct section, alphabetically
@@ -418,7 +477,7 @@ When the user provides a source (URL, file, paste), integrate it into the wiki:
 A single source can trigger updates across 5-15 wiki pages. This is normal
 and desired — it's the compounding effect.
 
-### 2. Query
+### 2. Query ⚡
 
 When the user asks a question about the wiki's domain:
 
@@ -468,7 +527,7 @@ This gate exists because grep demonstrably fails at thematic queries:
 
 ⑦ **Update log.md** with the query and whether it was filed.
 
-### 3. Lint
+### 3. Lint ⚡
 
 When the user asks to lint, health-check, or audit the wiki:
 
@@ -654,3 +713,9 @@ vault in Obsidian on your laptop/phone — changes appear within seconds.
 - **Grep retrieval fails much earlier than index.md limit — 83 pages is already broken for thematic queries.** On 2026-06-06, a grep for \"威科夫\" across an 83-page wiki returned 50 matches, but the first actual wyckoff analysis page was at rank **#46** (precision 2.2%). The top 45 results were noise: excalidraw, diandian-ai, hermes-skills — pages that mention \"威科夫\" once in passing. Grep ranks by match count/file-path, not relevance. Mitigations: (a) prefer specific terms over broad keywords, (b) use `index.md` for discovery before grep, (c) for wikis above ~50 pages, implement multi-signal retrieval (BM25 + embedding + RRF fusion) — see `references/wiki-retrieval-baseline.md`.
 - **`session_search` scroll requires real message IDs — `around_message_id=1` is a trap.** Message IDs are auto-incremented globally, not reset per session. The first message in a session might be ID 26309, not 1. Always use discovery mode (`session_search(query=...)`) first to find the actual `match_message_id`, then use that for scrolling. If discovery with a query returns nothing, fall back to `session_search()` browse mode and scroll via the last message ID from `bookend_end`. See also: `references/cron-sync-pitfalls.md` and `references/cron-session-scanning.md`.
 - **🚨 `patch` on `index.md` needs 5+ context lines — wikilinks look alike.** Index entries are identical in structure (`- [[page-name]] — description`). Using only 2-3 lines of context causes `patch` to match the wrong location, silently dropping entries (e.g. `gmid-flow` disappeared during a blogwatcher update on 2026-06-10). Always include at least 5 lines of surrounding context to disambiguate. After patching index.md, ALWAYS verify by reading the section — duplicate entries and accidental removals are silent bugs that require manual repair.
+
+- **🚨 wiki_op.py 是 7 个 Python 文件，不是一个文件。** `wiki_op.py` 是 dispatch 层，依赖 `wiki_path.py` + 5 个模块文件（`wiki_op_stale/entities/bridge/visits/search.py`）。部署到 `~/wiki/.hermes/scripts/` 时必须复制全部 `scripts/*.py`——用 `init-wiki.sh` 或 `cp scripts/*.py ~/wiki/.hermes/scripts/`。从 CLI 角度看是"一个命令"，从文件系统角度看是"7 个文件"。
+
+- **🚨 修改 skill 后必须部署脚本到生产 wiki。** 同步清单（sync checklist）里的 `wiki_op.py snapshot/stale/visits` 等子命令只在新版 `wiki_op.py` 中可用。如果生产 `~/wiki/.hermes/scripts/wiki_op.py` 还是旧版（只有 create/update/delete/lint），这些命令会报 `invalid choice` 错误。修改 skill 的 `scripts/` 后，立即 `cp` 到生产 wiki 再执行同步。**不要绕过 wiki_op.py 裸写文件**——`patch()` 直接改 wiki 页面违背 [[wiki-op-gate]] 三道防线架构（2026-06-10 实际发生过：先手动 cp 快照、patch 页面、旧脚本查 stale，再被用户指出后补部署）。
+
+- **`init-wiki.sh` 不创建 `_aliases/entities.json` 模板。** 新 wiki 上运行 `wiki_op.py entities "text"` 会输出 `⚠️ entities.json not found`。这是预期的——实体链接需要手动填充 `_aliases/entities.json` 才有用。如果需要空模板，手动创建 `{"entities": {}}`。
