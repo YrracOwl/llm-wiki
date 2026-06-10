@@ -893,9 +893,12 @@ def cmd_lint(args) -> None:
             if not pd.exists():
                 continue
             for fp in pd.rglob("*.md"):
+                rel_path = str(fp.relative_to(WIKI_ROOT))
                 slug = fp.stem
-                if slug not in indexed_slugs:
-                    issues.append(f"🔴 entities/{fp.name}: not in index.md")
+                # Index may contain bare slug or dir/slug — match both
+                dir_slug = f"{d}/{slug}"
+                if slug not in indexed_slugs and dir_slug not in indexed_slugs:
+                    issues.append(f"🔴 {rel_path}: not in index.md")
                     if args.fix:
                         # Read title from frontmatter
                         try:
