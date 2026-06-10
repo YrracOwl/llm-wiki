@@ -1,6 +1,6 @@
-# Wiki Self-Check — Four-Point Diagnostic
+# Wiki Quick Check — Four-Point Diagnostic
 
-> Standard health check for the wiki knowledge base. Run when the user says "自查 wiki", after bulk edits, or before closing a session that touched wiki pages.
+> Fast health scan. Run as a first pass when the user says "自查 wiki", after bulk edits, or before closing a session that touched wiki pages. This covers broken structural links and expired facts. For a full audit (frontmatter, outbound links, orphans, page size, tags), follow the **Lint** section in SKILL.md (steps ①-⑫) — the quick check is step 1, the full lint is steps 1-12.
 
 ## The four checks
 
@@ -102,7 +102,8 @@ acount = sum(1 for _ in archive_dir.rglob("*.md")) if archive_dir.exists() else 
 print(f"Versions: {vcount} | Archive: {acount}")
 ```
 
-Also run `wiki_op.py lint` for frontmatter/format issues.
+Also run `wiki_op.py lint` for frontmatter/format issues,
+then `wiki_op.py stale` for expired facts.
 
 ## Interpretation
 

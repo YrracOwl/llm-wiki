@@ -1,7 +1,7 @@
 ---
 name: llm-wiki
 description: "Karpathy's LLM Wiki — build and maintain a persistent, interlinked markdown knowledge base. Ingest sources, query compiled knowledge, and lint for consistency."
-version: 2.0.0
+version: 2.3.0
 author: Hermes Agent
 license: MIT
 metadata:
@@ -77,14 +77,14 @@ wiki/
 ├── queries/            # Layer 2: Filed query results worth keeping
 ├── .hermes/
 │   ├── plans/          # Implementation plans for wiki evolution
-│   ├── scripts/        # Tool scripts (stale_check, entity_link, version_history, bridge, visit_tracker)
+│   ├── scripts/        # Tool scripts (consolidated into wiki_op.py subcommands)
 │   └── visits.db       # SQLite side-channel visit counter (no write amplification)
 ├── _versions/          # ADD-only version snapshots (per-page, timestamped)
 ├── _aliases/           # Entity alias index (entities.json)
 └── skills/             # Skill-Wiki bridge: knowledge distillation + mapping
 ```
 
-**Layer 0 — Ecosystem Tools:** `.hermes/scripts/` contains five utility scripts: `stale_check`, `entity_link`, `version_history`, `skill_wiki_bridge`, and `visit_tracker` (see `references/evolution-tools.md`).
+**Layer 0 — Ecosystem Tools:** `$WIKI/.hermes/scripts/` contains the tool suite. **`wiki_op.py` is the unified CLI entry point** (create/update/delete/lint/search/stale/entities/bridge/visits/snapshot) — all write and query operations go through it. Individual scripts have been consolidated into `wiki_op.py` subcommands. See `references/evolution-tools.md` for the full tool reference.
 **Layer 1 — Raw Sources:** Immutable. The agent reads but never modifies these.
 **Layer 2 — The Wiki:** Agent-owned markdown files. Created, updated, and cross-referenced by the agent.
 **Layer 3 — The Schema:** `SCHEMA.md` defines structure, conventions, tag taxonomy, and all protocols.
@@ -112,20 +112,35 @@ Only after orientation should you ingest, query, or lint. This prevents:
 - Contradicting the schema's conventions
 - Repeating work already logged
 
-For large wikis (100+ pages), also run a quick `search_files` for the topic
-at hand before creating anything new.
+For wikis with 50+ pages, BM25 search is mandatory before creating anything new:
+```bash
+python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py search "<topic>" --agent
+```
+This catches existing pages grep would miss — never skip this.
 
 ## Initializing a New Wiki
 
 When the user asks to create or start a wiki:
 
+**Preferred: Use `init-wiki.sh`** (one-shot bootstrap, copies all scripts + writes SCHEMA/index/log templates):
+
+```bash
+bash ${SKILL_DIR:-~/.hermes/skills/research/llm-wiki}/scripts/init-wiki.sh [wiki-path]
+```
+
+This is the only supported bootstrap path — it ensures `wiki_op.py` and all modules are present
+at `${WIKI}/.hermes/scripts/`. The script handles idempotent re-runs (skip/sync-scripts/re-init).
+
+**Manual fallback** (only if `init-wiki.sh` is unavailable):
+
 1. Determine the wiki path (from config, env var, or ask the user; default `~/wiki`)
 2. Create the directory structure above
-3. Ask the user what domain the wiki covers — be specific
-4. Write `SCHEMA.md` customized to the domain (see template below)
-5. Write initial `index.md` with sectioned header
-6. Write initial `log.md` with creation entry
-7. Confirm the wiki is ready and suggest first sources to ingest
+3. Copy all `*.py` scripts from the skill's `scripts/` directory to `${WIKI}/.hermes/scripts/`
+4. Ask the user what domain the wiki covers — be specific
+5. Write `SCHEMA.md` customized to the domain (see template below)
+6. Write initial `index.md` with sectioned header
+7. Write initial `log.md` with creation entry
+8. Confirm the wiki is ready and suggest first sources to ingest
 
 ### SCHEMA.md Template
 
@@ -228,14 +243,12 @@ valid_from: 2026-05-25
 valid_until: 2026-06-01  # known expiration date
 ```
 
-**Script:** `~/.hermes/scripts/stale_check.py` (symlinked to `~/wiki/.hermes/scripts/stale_check.py`)
-
-Scans all pages for `status: current` + `valid_until < today` and alerts. Cron runs this nightly.
+**Script:** `wiki_op.py stale` — scans all pages for `status: current` + `valid_until < today` and alerts. Cron runs this nightly.
 
 ### 2. ADD-only Protocol (只增不改不删)
 
 Facts are never overwritten or deleted. When updating:
-1. Save a version snapshot: `python3 ~/wiki/.hermes/scripts/version_history.py concepts/page.md`
+1. Save a version snapshot: `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py snapshot concepts/page.md`
 2. Append a timestamped entry to the page's `## 历史记录` section
 3. Bump `updated` date in frontmatter
 4. If contradictory info exists, mark `contradictions:` — let the reader judge
@@ -244,9 +257,9 @@ Facts are never overwritten or deleted. When updating:
 
 **Index:** `~/wiki/_aliases/entities.json` — maps every entity slug to primary name + all aliases.
 
-**Script:** `~/.hermes/scripts/entity_link.py` — pipe text through it to get `[[wikilink]]` suggestions:
+**Script:** `wiki_op.py entities` — pipe text through it to get `[[wikilink]]` suggestions:
 ```bash
-echo "宇树科技和CXMT都要IPO了" | python3 ~/wiki/.hermes/scripts/entity_link.py
+echo "宇树科技和CXMT都要IPO了" | python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py entities -
 # → "宇树科技" → [[unitree-robotics]]
 # → "CXMT" → [[changxin-storage]]
 ```
@@ -255,9 +268,9 @@ echo "宇树科技和CXMT都要IPO了" | python3 ~/wiki/.hermes/scripts/entity_l
 
 **Mapping:** `~/wiki/skills/_mapping.md` — every Hermes skill ↔ wiki page pair.
 
-**Script:** `~/.hermes/scripts/skill_wiki_bridge.py` — analyze a SKILL.md for wiki references and extractable knowledge:
+**Script:** `wiki_op.py bridge` — analyze a SKILL.md for wiki references and extractable knowledge:
 ```bash
-python3 ~/wiki/.hermes/scripts/skill_wiki_bridge.py ~/.hermes/skills/investing/wyckoff-stock-analysis/SKILL.md
+python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py bridge ~/.hermes/skills/investing/wyckoff-stock-analysis/SKILL.md
 ```
 
 **Format:** Skill → Wiki uses `> 📚 Wiki: [[page-name]]` in SKILL.md. Wiki → Skill uses `skill: skill-name` in frontmatter.
@@ -277,16 +290,16 @@ python3 ~/wiki/.hermes/scripts/skill_wiki_bridge.py ~/.hermes/skills/investing/w
 
 | # | Step | Command / Action |
 |---|------|-----------------|
-| 1 | Snapshot | `python3 ~/wiki/.hermes/scripts/version_history.py <page>.md` |
-| 2 | Update pages | Patch relevant entity/concept pages; bump `updated` date; follow ADD-only |
-| 3 | Update index | If pages added/removed → update count and "Last updated" |
-| 4 | Update log | Append entry with date, action type, summary |
-| 5 | Stale check | `python3 ~/wiki/.hermes/scripts/stale_check.py` |
-| 6 | Entity links | `python3 ~/wiki/.hermes/scripts/entity_link.py <updated-pages>` |
-| 7 | Skill bridge | For new/changed skills: `python3 ~/wiki/.hermes/scripts/skill_wiki_bridge.py <SKILL.md>` |
-| 8 | Mapping update | If new skill created → register in `~/wiki/skills/_mapping.md` |
-| 9 | SKILL.md ref | If new skill created → add `> 📚 Wiki: [[page]]` to SKILL.md |
-| 10 | Visit heatmap | `python3 ~/wiki/.hermes/scripts/visit_tracker.py top 10` + `cold 30` |
+| 1 | Snapshot | `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py snapshot <page>` |
+| 2 | Update pages | `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py update --page <page> --change-summary "..." --patch-file /tmp/patch.json` |
+| 3 | Update index | Manual (add to index.md if new page) |
+| 4 | Update log | Manual (append to log.md) |
+| 5 | Stale check | `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py stale` |
+| 6 | Entity links | `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py entities "<text>"` |
+| 7 | Skill bridge | `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py bridge <SKILL.md>` |
+| 8 | Mapping update | Manual (register in _mapping.md) |
+| 9 | SKILL.md ref | Manual (add `> 📚 Wiki: [[page]]` to SKILL.md) |
+| 10 | Visit heatmap | `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py visits top 10` + `visits cold 30` |
 
 **Change → Page map:**
 
@@ -311,17 +324,19 @@ python3 ~/wiki/.hermes/scripts/skill_wiki_bridge.py ~/.hermes/skills/investing/w
 The `每日Wiki知识同步` cron has been **downgraded from primary archiver to safety net**. It runs nightly at 03:00 Beijing time and only performs automated checks — no session scanning or page creation.
 
 **Cron responsibilities (CHECK-ONLY):**
-- `stale_check.py` — scan for expired facts
+- `wiki_op.py stale` — scan for expired facts
 - Orphan page detection — files not in index.md
-- `entity_link.py` — verify cross-references on recently changed pages
-- `skill_wiki_bridge.py` — check skill↔wiki links
+- `wiki_op.py entities` — verify cross-references on recently changed pages
+- `wiki_op.py bridge` — check skill↔wiki links
 
 **Cron does NOT:** scan sessions, identify new knowledge, create pages, or update content. That's the real-time sync's job.
 
 > ⚠️ **Cron prompt design**: All cron jobs now use a 🚨 anchor block in the middle of their prompt to force the final response to contain the actual report (not just "✅ Done"). See `[[cron-pitfalls]]`.
+> 🔍 **Session scanning**: When `session_search(query=...)` returns 0 results for broad keyword queries, use browse-first-then-discover pattern. See `references/cron-session-scanning.md`.
 
 ---
-> **See also:** `references/evolution-tools.md` — complete reference for the four tool scripts and their usage patterns.
+> **See also:** `references/evolution-tools.md` — complete reference for the wiki_op.py tool suite and usage patterns.
+> **Retrieval baseline:** `references/wiki-retrieval-baseline.md` — 2026-06-06 grep quality benchmark across 83-page wiki.
 ```
 
 ### index.md Template
@@ -407,26 +422,57 @@ and desired — it's the compounding effect.
 
 When the user asks a question about the wiki's domain:
 
-① **Read `index.md`** to identify relevant pages.
-② **For wikis with 100+ pages**, also `search_files` across all `.md` files
-   for key terms — the index alone may miss relevant content.
-③ **Read the relevant pages** using `read_file`.
+🚨 **HARD GATE — BM25 before any page read for thematic queries:**
+
+> Before you read a single wiki page to answer a thematic question, you MUST run:
+> ```bash
+> python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py search "<query>" --agent
+> ```
+> This is non-negotiable. `search_files` (grep) is REJECTED for wiki discovery.
+> The ONLY exceptions are:
+> - **Exact keyword lookup** — searching for a specific function name, API key,
+>   error code, or ID string (not a concept/topic)
+> - **Wiki under 50 pages** — `index.md` alone is sufficient for navigation
+> - After BM25 has already been run in this session for the same topic
+
+This gate exists because grep demonstrably fails at thematic queries:
+- 2026-06-06 benchmark: "威科夫" query across 83 pages → first hit at rank #46 (2.2% precision)
+- BM25: same query → #1 hit, Top-10 precision 60%
+- See `references/wiki-retrieval-baseline.md` and `references/wiki-bm25-search.md`
+
+① **Run BM25 search** (mandatory — the gate above):
+   ```bash
+   python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py search "<query>" --agent
+   ```
+   Returns a ranked top-5 list of `[[wikilinks]]` with relevance scores.
+
+② **Read the top-ranked pages** using `read_file`. Start from #1 and read
+   enough pages to answer the query (typically 2-5 pages). The BM25 scores
+   tell you which pages are most relevant — trust the ranking.
+
+③ **For wikis under 50 pages**, `index.md` alone is sufficient.
+   For exact keyword lookups (function names, IDs, error codes), `search_files`
+   (grep) is acceptable — this is the only grep use case for wiki queries.
+
 ④ **Synthesize an answer** from the compiled knowledge. Cite the wiki pages
    you drew from: "Based on [[page-a]] and [[page-b]]..."
-④½ **Record visits** for every page you read during the query:
+
+⑤ **Record visits** for every page you read during the query:
    ```bash
-   python3 ~/wiki/.hermes/scripts/visit_tracker.py record <page-slug>
+   python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py visits record <page-slug>
    ```
-   This builds a side-channel SQLite (`visits.db`) to surface cold/hot pages
-   later — zero impact on markdown files (no write amplification).
-⑤ **File valuable answers back** — if the answer is a substantial comparison,
+
+⑥ **File valuable answers back** — if the answer is a substantial comparison,
    deep dive, or novel synthesis, create a page in `queries/` or `comparisons/`.
    Don't file trivial lookups — only answers that would be painful to re-derive.
-⑥ **Update log.md** with the query and whether it was filed.
+
+⑦ **Update log.md** with the query and whether it was filed.
 
 ### 3. Lint
 
 When the user asks to lint, health-check, or audit the wiki:
+
+**Start with the four-point quick check** (`references/wiki-self-check.md`) — catches broken index links, dangling refs, expired facts, and broken wikilinks. This is a fast first pass. Then proceed with the full 12-step audit below for outbound links, orphans (no inbound), tags, frontmatter, page size, etc.
 
 ① **Orphan pages:** Find pages with no inbound `[[wikilinks]]` from other pages.
 ```python
@@ -462,8 +508,8 @@ wiki = "<WIKI_PATH>"
 ⑩ **Report findings** with specific file paths and suggested actions, grouped by
    severity (broken links > expired facts > orphans > stale content > style issues).
 
-⑪ **Run evolution tools:** After lint, run `stale_check.py` to catch expired facts,
-   and `entity_link.py` on any changed pages to verify cross-references are complete.
+⑪ **Run evolution tools:** After lint, run `wiki_op.py stale` to catch expired facts,
+   and `wiki_op.py entities` on any changed pages to verify cross-references are complete.
 
 ⑫ **Append to log.md:** `## [YYYY-MM-DD] lint | N issues found`
 
@@ -472,7 +518,13 @@ wiki = "<WIKI_PATH>"
 ### Searching
 
 ```bash
-# Find pages by content
+# BM25 relevance-ranked search (PRIMARY — use this for all thematic queries)
+python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py search "威科夫 吸筹" --agent
+# Returns compact top-5 [[wikilinks]] with scores
+# Rebuild index if stale (auto-detected):
+python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py search --rebuild-only
+
+# Find pages by content — grep for exact keywords (fast, no index needed)
 search_files "transformer" path="$WIKI" file_glob="*.md"
 
 # Find pages by filename
@@ -595,7 +647,10 @@ vault in Obsidian on your laptop/phone — changes appear within seconds.
 - **Index completeness check after every sync** — files created in entities/ or concepts/ that aren't in index.md become invisible orphans. After any write to the wiki, compare `search_files "*.md" target="files" path="~/wiki/entities"` against the index's Entities section, and same for concepts/. Found `tailscale-failed.md` orphaned in May 2026 — created during bulk init but never indexed.
 - **Rotate the log** — when log.md exceeds 500 entries, rename it `log-YYYY.md` and start fresh.
   The agent should check log size during lint.
-- **Handle contradictions explicitly** — don't silently overwrite. Note both claims with dates,
+- **Script fragmentation — individual tools pre-date wiki_op.py.** Utility scripts were created before `wiki_op.py` became the unified CLI. All individual scripts have been consolidated into `wiki_op.py` subcommands (see Sync Checklist above). When adding new wiki tooling, add it as a `wiki_op.py` subcommand. ⚠️ **The `wiki_op.py` write gate exists for a reason**: it mechanically enforces ADD-only, tag whitelist, frontmatter completeness, and line-number corruption detection. Direct `write_file`/`patch` on wiki pages bypasses these guards. Prefer `wiki_op.py update/create` for all wiki writes unless there's a specific reason not to.
   mark in frontmatter, flag for user review.
-- **Domain-level and model-generated skills** — see `references/agent-memory-landscape.md` for a 2026-05 survey of agent memory architectures (Graphiti, Mem0, Letta, SkillOpt, Cognitive Workspace, etc.) and their implications for wiki evolution.
+- **Domain-level and model-generated skills** — see `references/agent-memory-landscape.md` for a 2026-06 survey of agent memory architectures (agentmemory, Graphiti, Mem0, Letta, SkillOpt, Cognitive Workspace, etc.) and their implications for wiki evolution. Updated 2026-06-06 with agentmemory comparison.
 - **Don't gatekeep by narrow domain assumptions** — the wiki's scope is defined by SCHEMA.md's domain field, not by the agent's guess. Many wikis use a three-layer model (Agent/User/World). If SCHEMA.md says the domain covers \"everything learned through the agent,\" then technical research, datasheet analysis, investment notes, photography knowledge, and any other knowledge the user generates through conversation ALL belong. Never refuse to add content because \"it's not about Agent configuration\" — that's reading the domain too narrowly. The domain is what the schema says it is.
+- **Grep retrieval fails much earlier than index.md limit — 83 pages is already broken for thematic queries.** On 2026-06-06, a grep for \"威科夫\" across an 83-page wiki returned 50 matches, but the first actual wyckoff analysis page was at rank **#46** (precision 2.2%). The top 45 results were noise: excalidraw, diandian-ai, hermes-skills — pages that mention \"威科夫\" once in passing. Grep ranks by match count/file-path, not relevance. Mitigations: (a) prefer specific terms over broad keywords, (b) use `index.md` for discovery before grep, (c) for wikis above ~50 pages, implement multi-signal retrieval (BM25 + embedding + RRF fusion) — see `references/wiki-retrieval-baseline.md`.
+- **`session_search` scroll requires real message IDs — `around_message_id=1` is a trap.** Message IDs are auto-incremented globally, not reset per session. The first message in a session might be ID 26309, not 1. Always use discovery mode (`session_search(query=...)`) first to find the actual `match_message_id`, then use that for scrolling. If discovery with a query returns nothing, fall back to `session_search()` browse mode and scroll via the last message ID from `bookend_end`. See also: `references/cron-sync-pitfalls.md` and `references/cron-session-scanning.md`.
+- **🚨 `patch` on `index.md` needs 5+ context lines — wikilinks look alike.** Index entries are identical in structure (`- [[page-name]] — description`). Using only 2-3 lines of context causes `patch` to match the wrong location, silently dropping entries (e.g. `gmid-flow` disappeared during a blogwatcher update on 2026-06-10). Always include at least 5 lines of surrounding context to disambiguate. After patching index.md, ALWAYS verify by reading the section — duplicate entries and accidental removals are silent bugs that require manual repair.
