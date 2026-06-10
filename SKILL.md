@@ -1,7 +1,7 @@
 ---
 name: llm-wiki
 description: "Karpathy's LLM Wiki — build and maintain a persistent, interlinked markdown knowledge base. Use when user asks to ingest sources, update the wiki, query compiled knowledge, lint for consistency, create a knowledge base, or add notes. All writes go through wiki_op.py unified CLI."
-version: 2.3.1
+version: 2.3.2
 author: Hermes Agent
 license: MIT
 metadata:
@@ -41,7 +41,7 @@ Use this skill when the user:
 - Asks to lint, audit, or health-check their wiki
 - References their wiki, knowledge base, or "notes" in a research context
 
-> ⚠️ **Line count**: This skill exceeds the 300-line target (~720 lines). This is intentional as a **domain knowledge skill** — the Ingest/Query/Lint operation flows, command templates, sync checklist, and schema templates are all **operational dependencies** the Agent needs at decision time, not "reference material" to be looked up separately. Removing them would add 3-5 `read_file` calls per operation, making every wiki interaction slower and more error-prone. The BM25 gate and write gate markers (🚨) ensure critical rules aren't buried.
+> ⚠️ **Line count**: This skill is ~545 lines, over the 300-line target. This is intentional as a **domain knowledge skill** — the Core Operations (Ingest/Query/Lint with command templates), sync checklist, core protocols, and pitfall catalog are all **operational dependencies** the Agent needs at decision time. Init-time templates and Obsidian setup have been moved to `references/wiki-templates.md` (saving ~175 lines). The BM25 gate and write gate markers (🚨) ensure critical rules aren't buried.
 
 ## Wiki Location
 
@@ -146,89 +146,14 @@ at `${WIKI}/.hermes/scripts/`. The script handles idempotent re-runs (skip / upd
 
 ### SCHEMA.md Template
 
-Adapt to the user's domain. The schema constrains agent behavior and ensures consistency:
-
-```markdown
-# Wiki Schema
-
-## Domain
-三层知识库 — 「你 (Agent)」「我 (User)」「世界 (World)」：
-
-- **你 (Agent)**：本机 Hermes Agent 的环境配置、工具链、技能使用经验、踩过的坑
-- **我 (User)**：用户的身份、偏好、兴趣、行事风格、已掌握的知识、个人项目
-- **世界 (World)**：通过 Agent 研究获得的一切知识——技术调研、投资分析、学术文献、工程笔记、市场情报
-
-原则：任何在对话中产生的、值得留存的知识都可以入 Wiki。不复述"Agent 做了什么"，而是提炼"我们知道了什么"。
-
-## Conventions
-- File names: lowercase, hyphens, no spaces (e.g., `wyckoff-analysis.md`) or for 世界层 technical topics: `adclk954-broadband-jitter.md`
-- Every wiki page starts with YAML frontmatter (see below)
-- Use `[[wikilinks]]` to link between pages (minimum 2 outbound links per page)
-- When updating a page, always bump the `updated` date
-- Every new page must be added to `index.md` under the correct section
-- Every action must be appended to `log.md`
-- 语言：中文为主，技术术语保留英文
-- 页面归属标注：在正文开头用一句「归属：你/我/世界」标注该页面主要属于哪一层（跨层页面可并列）
-
-## Frontmatter
-  ```yaml
-  ---
-  title: Page Title
-  created: YYYY-MM-DD
-  updated: YYYY-MM-DD
-  type: entity | concept | comparison | query | summary
-  tags: [from taxonomy below]
-  sources: [raw/articles/source-name.md]
-  ---
-  ```
-
-## Tag Taxonomy
-- **环境与配置**: server, config, network, proxy, mirror
-- **工具与技能**: skill, tool, cli, automation
-- **数据与API**: data-source, api, stock, news
-- **方法论**: theory, workflow, strategy, analysis
-- **经验与坑**: pitfall, workaround, lesson, memory
-- **平台**: qqbot, telegram, discord, xiaohongshu, steam, weibo, github
-- **投资**: wyckoff, sentiment, a-stock, technical-analysis
-- **内容**: mao, poetry, literature, classic
-- **工程**: electronics, datasheet, semiconductor, signal-processing, measurement
-
-## Page Thresholds
-- **你 (Agent) 层**：当工具/技能/配置在 2+ 会话中出现或是一个主要工作流的核心 → 建页面
-- **我 (User) 层**：当用户的偏好/身份/项目被明确讨论并形成可复用知识 → 建页面
-- **世界 (World) 层**：当 Agent 完成一次有深度的技术调研、投资分析或学术查询，且结果值得复用 → 建页面
-- **Add to existing page** when new info relates to an already-covered topic
-- **DON'T create a page** for passing mentions, trivia, or things outside the domain
-- **Split a page** when it exceeds ~200 lines — break into sub-topics with cross-links
-- **Archive a page** when its content is fully superseded — move to `_archive/`, remove from index
-
-## Entity Pages
-One page per notable entity. Include:
-- Overview / what it is
-- Key facts and dates
-- Relationships to other entities ([[wikilinks]])
-- Source references
-
-## Concept Pages
-One page per concept or topic. Include:
-- Definition / explanation
-- Current state of knowledge
-- Open questions or debates
-- Related concepts ([[wikilinks]])
-
-## Comparison Pages
-Side-by-side analyses. Include:
-- What is being compared and why
-- Dimensions of comparison (table format preferred)
-- Verdict or synthesis
-- Sources
-
-## Update Policy
-When new information conflicts with existing content:
-1. Check the dates — newer sources generally supersede older ones
-2. If genuinely contradictory, note both positions with dates and sources
-3. Mark the contradiction in frontmatter: `contradictions: [page-name]`
-4. Flag for user review in the lint report
+> 📄 **See `references/wiki-templates.md`** for the full SCHEMA.md template including Domain, Conventions, Frontmatter, Tag Taxonomy, Page Thresholds, Entity/Concept/Comparison page structures, and Update Policy.
+>
+> Quick reference for initialization:
+> ```bash
+> # Run init-wiki.sh for one-shot bootstrap (writes SCHEMA + index + log + copies scripts)
+> bash ${SKILL_DIR:-~/.hermes/skills/research/llm-wiki}/scripts/init-wiki.sh [wiki-path]
+> ```
+> For manual initialization, `read_file` the templates file and adapt.
 
 
 ## Four Core Protocols
@@ -309,6 +234,9 @@ python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py bridge ~/.hermes/skills/
 | 8 | Mapping update | Manual (register in _mapping.md) |
 | 9 | SKILL.md ref | Manual (add `> 📚 Wiki: [[page]]` to SKILL.md) |
 | 10 | Visit heatmap | `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py visits top 10` + `visits cold 30` |
+| 11 | **Verify** ⚡ | `python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py lint` — catches broken links, missing index entries, tag violations. Exit 0 = clean sync. |
+
+> ⚠️ Steps 3, 4, 8, 9 are manual — they depend on Agent discipline. Step 11 (`wiki_op.py lint`) is the mechanical backstop: if index.md wasn't updated (step 3) or a page was created without cross-references, lint will catch it.
 
 **Change → Page map:**
 
@@ -350,45 +278,9 @@ The `每日Wiki知识同步` cron has been **downgraded from primary archiver to
 > **Retrieval baseline:** `references/wiki-retrieval-baseline.md` — 2026-06-06 grep quality benchmark across 83-page wiki.
 ```
 
-### index.md Template
+### index.md & log.md Templates
 
-The index is sectioned by type. Each entry is one line: wikilink + summary.
-
-```markdown
-# Wiki Index
-
-> Content catalog. Every wiki page listed under its type with a one-line summary.
-> Read this first to find relevant pages for any query.
-> Last updated: YYYY-MM-DD | Total pages: N
-
-## Entities
-<!-- Alphabetical within section -->
-
-## Concepts
-
-## Comparisons
-
-## Queries
-```
-
-**Scaling rule:** When any section exceeds 50 entries, split it into sub-sections
-by first letter or sub-domain. When the index exceeds 200 entries total, create
-a `_meta/topic-map.md` that groups pages by theme for faster navigation.
-
-### log.md Template
-
-```markdown
-# Wiki Log
-
-> Chronological record of all wiki actions. Append-only.
-> Format: `## [YYYY-MM-DD] action | subject`
-> Actions: ingest, update, query, lint, create, archive, delete
-> When this file exceeds 500 entries, rotate: rename to log-YYYY.md, start fresh.
-
-## [YYYY-MM-DD] create | Wiki initialized
-- Domain: [domain]
-- Structure created with SCHEMA.md, index.md, log.md
-```
+> 📄 **See `references/wiki-templates.md`** for the full index.md and log.md templates including scaling rules and log rotation policy. These are only needed during wiki initialization — `init-wiki.sh` creates them automatically.
 
 ## Core Operations
 
@@ -602,120 +494,55 @@ When ingesting multiple sources at once, batch the updates:
 1. Read all sources first
 2. Identify all entities and concepts across all sources
 3. Check existing pages for all of them (one search pass, not N)
-4. Create/update pages in one pass (avoids redundant updates)
+4. Create/update pages in one pass — **all via `wiki_op.py`** (avoids redundant updates and ensures frontmatter/index/log consistency)
 5. Update index.md once at the end
 6. Write a single log entry covering the batch
 
 ### Archiving
 
-When content is fully superseded or the domain scope changes:
-1. Create `_archive/` directory if it doesn't exist
-2. Move the page to `_archive/` with its original path (e.g., `_archive/entities/old-page.md`)
-3. Remove from `index.md`
-4. Update any pages that linked to it — replace wikilink with plain text + "(archived)"
-5. Log the archive action
-
-### Obsidian Integration
-
-The wiki directory works as an Obsidian vault out of the box:
-- `[[wikilinks]]` render as clickable links
-- Graph View visualizes the knowledge network
-- YAML frontmatter powers Dataview queries
-- The `raw/assets/` folder holds images referenced via `![[image.png]]`
-
-For best results:
-- Set Obsidian's attachment folder to `raw/assets/`
-- Enable "Wikilinks" in Obsidian settings (usually on by default)
-- Install Dataview plugin for queries like `TABLE tags FROM "entities" WHERE contains(tags, "company")`
-
-If using the Obsidian skill alongside this one, set `OBSIDIAN_VAULT_PATH` to the
-same directory as the wiki path.
-
-### Obsidian Headless (servers and headless machines)
-
-On machines without a display, use `obsidian-headless` instead of the desktop app.
-It syncs vaults via Obsidian Sync without a GUI — perfect for agents running on
-servers that write to the wiki while Obsidian desktop reads it on another device.
-
-**Setup:**
+When content is fully superseded or the domain scope changes, **use `wiki_op.py delete`** (🤖 强制):
 ```bash
-# Requires Node.js 22+
-npm install -g obsidian-headless
-
-# Login (requires Obsidian account with Sync subscription)
-ob login --email <email> --password '<password>'
-
-# Create a remote vault for the wiki
-ob sync-create-remote --name "LLM Wiki"
-
-# Connect the wiki directory to the vault
-cd ~/wiki
-ob sync-setup --vault "<vault-id>"
-
-# Initial sync
-ob sync
-
-# Continuous sync (foreground — use systemd for background)
-ob sync --continuous
+# Archive with confirmation (shows inbound links, requires --force to proceed)
+python3 ${WIKI_PATH:-~/wiki}/.hermes/scripts/wiki_op.py delete --page entities/old-page --force
 ```
+This mechanically: moves to `_archive/`, removes from `index.md`, logs the action, and warns about inbound links that need updating. Do NOT manually `mv` or `rm` wiki pages.
 
-**Continuous background sync via systemd:**
-```ini
-# ~/.config/systemd/user/obsidian-wiki-sync.service
-[Unit]
-Description=Obsidian LLM Wiki Sync
-After=network-online.target
-Wants=network-online.target
+### Obsidian Integration & Headless Sync
 
-[Service]
-ExecStart=/path/to/ob sync --continuous
-WorkingDirectory=/home/user/wiki
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-```
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now obsidian-wiki-sync
-# Enable linger so sync survives logout:
-sudo loginctl enable-linger $USER
-```
-
-This lets the agent write to `~/wiki` on a server while you browse the same
-vault in Obsidian on your laptop/phone — changes appear within seconds.
+> 📄 **See `references/wiki-templates.md`** for Obsidian desktop integration (vault setup, Dataview, plugins) and Obsidian Headless setup (CLI sync, systemd service). These are one-time setup operations — not needed for daily wiki use.
 
 ## Pitfalls
 
-- **Never modify files in `raw/`** — sources are immutable. Corrections go in wiki pages.
-- **Always orient first** — read SCHEMA + index + recent log before any operation in a new session.
-  Skipping this causes duplicates and missed cross-references.
-- **Always update index.md and log.md** — skipping this makes the wiki degrade. These are the
-  navigational backbone.
-- **Don't create pages for passing mentions** — follow the Page Thresholds in SCHEMA.md. A name
-  appearing once in a footnote doesn't warrant an entity page.
-- **Don't create pages without cross-references** — isolated pages are invisible. Every page must
-  link to at least 2 other pages.
-- **Frontmatter is required** — it enables search, filtering, and staleness detection.
-- **Tags must come from the taxonomy** — freeform tags decay into noise. Add new tags to SCHEMA.md
-  first, then use them.
-- **Keep pages scannable** — a wiki page should be readable in 30 seconds. Split pages over
-  200 lines. Move detailed analysis to dedicated deep-dive pages.
-- **Index completeness check after every sync** — files created in entities/ or concepts/ that aren't in index.md become invisible orphans. After any write to the wiki, compare `search_files "*.md" target="files" path="~/wiki/entities"` against the index's Entities section, and same for concepts/. Found `tailscale-failed.md` orphaned in May 2026 — created during bulk init but never indexed.
-- **Rotate the log** — when log.md exceeds 500 entries, rename it `log-YYYY.md` and start fresh.
-  The agent should check log size during lint.
-- **Script fragmentation — individual tools pre-date wiki_op.py.** Utility scripts were created before `wiki_op.py` became the unified CLI. All individual scripts have been consolidated into `wiki_op.py` subcommands (see Sync Checklist above). When adding new wiki tooling, add it as a `wiki_op.py` subcommand. ⚠️ **The `wiki_op.py` write gate exists for a reason**: it mechanically enforces ADD-only, tag whitelist, frontmatter completeness, and line-number corruption detection. Direct `write_file`/`patch` on wiki pages bypasses these guards. Prefer `wiki_op.py update/create` for all wiki writes unless there's a specific reason not to.
-  mark in frontmatter, flag for user review.
-- **Domain-level and model-generated skills** — see `references/agent-memory-landscape.md` for a 2026-06 survey of agent memory architectures (agentmemory, Graphiti, Mem0, Letta, SkillOpt, Cognitive Workspace, etc.) and their implications for wiki evolution. Updated 2026-06-06 with agentmemory comparison.
-- **Don't gatekeep by narrow domain assumptions** — the wiki's scope is defined by SCHEMA.md's domain field, not by the agent's guess. Many wikis use a three-layer model (Agent/User/World). If SCHEMA.md says the domain covers \"everything learned through the agent,\" then technical research, datasheet analysis, investment notes, photography knowledge, and any other knowledge the user generates through conversation ALL belong. Never refuse to add content because \"it's not about Agent configuration\" — that's reading the domain too narrowly. The domain is what the schema says it is.
-- **Grep retrieval fails much earlier than index.md limit — 83 pages is already broken for thematic queries.** On 2026-06-06, a grep for \"威科夫\" across an 83-page wiki returned 50 matches, but the first actual wyckoff analysis page was at rank **#46** (precision 2.2%). The top 45 results were noise: excalidraw, diandian-ai, hermes-skills — pages that mention \"威科夫\" once in passing. Grep ranks by match count/file-path, not relevance. Mitigations: (a) prefer specific terms over broad keywords, (b) use `index.md` for discovery before grep, (c) for wikis above ~50 pages, implement multi-signal retrieval (BM25 + embedding + RRF fusion) — see `references/wiki-retrieval-baseline.md`.
-- **`session_search` scroll requires real message IDs — `around_message_id=1` is a trap.** Message IDs are auto-incremented globally, not reset per session. The first message in a session might be ID 26309, not 1. Always use discovery mode (`session_search(query=...)`) first to find the actual `match_message_id`, then use that for scrolling. If discovery with a query returns nothing, fall back to `session_search()` browse mode and scroll via the last message ID from `bookend_end`. See also: `references/cron-sync-pitfalls.md` and `references/cron-session-scanning.md`.
-- **🚨 `patch` on `index.md` needs 5+ context lines — wikilinks look alike.** Index entries are identical in structure (`- [[page-name]] — description`). Using only 2-3 lines of context causes `patch` to match the wrong location, silently dropping entries (e.g. `gmid-flow` disappeared during a blogwatcher update on 2026-06-10). Always include at least 5 lines of surrounding context to disambiguate. After patching index.md, ALWAYS verify by reading the section — duplicate entries and accidental removals are silent bugs that require manual repair.
+> Format: ❌ wrong behavior — why it breaks — ✅ correct approach. Each entry is a real bug that happened.
 
-- **🚨 wiki_op.py 是 7 个 Python 文件，不是一个文件。** `wiki_op.py` 是 dispatch 层，依赖 `wiki_path.py` + 5 个模块文件（`wiki_op_stale/entities/bridge/visits/search.py`）。部署到 `~/wiki/.hermes/scripts/` 时必须复制全部 `scripts/*.py`——用 `init-wiki.sh` 或 `cp scripts/*.py ~/wiki/.hermes/scripts/`。从 CLI 角度看是"一个命令"，从文件系统角度看是"7 个文件"。
+### Wiki Maintenance
 
-- **🚨 修改 skill 后必须部署脚本到生产 wiki。** 同步清单（sync checklist）里的 `wiki_op.py snapshot/stale/visits` 等子命令只在新版 `wiki_op.py` 中可用。如果生产 `~/wiki/.hermes/scripts/wiki_op.py` 还是旧版（只有 create/update/delete/lint），这些命令会报 `invalid choice` 错误。修改 skill 的 `scripts/` 后，立即 `cp` 到生产 wiki 再执行同步。**不要绕过 wiki_op.py 裸写文件**——`patch()` 直接改 wiki 页面违背 [[wiki-op-gate]] 三道防线架构（2026-06-10 实际发生过：先手动 cp 快照、patch 页面、旧脚本查 stale，再被用户指出后补部署）。
+1. ❌ **Direct `write_file`/`patch` on wiki `.md` files** → bypasses frontmatter validation, index sync, log, snapshots, tag whitelist, line-number corruption detection. → ✅ All writes go through `wiki_op.py create` / `wiki_op.py update --patch-file`.
 
-- **`init-wiki.sh` 不创建 `_aliases/entities.json` 模板。** 新 wiki 上运行 `wiki_op.py entities "text"` 会输出 `⚠️ entities.json not found`。这是预期的——实体链接需要手动填充 `_aliases/entities.json` 才有用。如果需要空模板，手动创建 `{"entities": {}}`。
+2. ❌ **Skipping orientation** (not reading SCHEMA + index + log before operating) → duplicates, missed cross-references, contradicted conventions. → ✅ Always run the orientation three reads in a new session.
+
+3. ❌ **Creating pages for passing mentions** (a name appears once in a footnote) → wiki bloat, noise in index, broken wikilinks. → ✅ Follow Page Thresholds from SCHEMA.md. Add to existing page when possible.
+
+4. ❌ **No cross-references** (new page links to nothing) → invisible page, nobody discovers it. → ✅ Minimum 2 outbound wikilinks per page. Check existing pages link back.
+
+5. ❌ **Tags outside taxonomy** → freeform tags decay into noise, lint fails. → ✅ Only use tags from SCHEMA.md tag taxonomy. Add new tags to SCHEMA.md first.
+
+6. ❌ **Pages over 200 lines** → unreadable, hard to navigate. → ✅ Split into sub-topics, link between them.
+
+7. ❌ **Skipping index.md / log.md updates** → navigational backbone degrades, pages become invisible. → ✅ After every write: add to index, append to log.
+
+8. ❌ **Bypassing wiki_op.py with raw `patch()` on wiki pages** (e.g., manual cp snapshots, then patch pages, then old stale_check.py — all done 2026-06-10) → violates [[wiki-op-gate]] three-layer defense architecture. → ✅ After modifying skill scripts, cp them to production wiki, then use wiki_op.py for all sync operations.
+
+### Search & Navigation
+
+9. ❌ **grep/search_files for thematic wiki queries** (e.g., "威科夫") across 83+ pages → first real hit at rank #46, precision 2.2%. → ✅ BM25 `wiki_op.py search "query" --agent` for all thematic queries. grep only for exact keywords (function names, error codes, IDs).
+
+10. ❌ **`session_search` with `around_message_id=1`** → message IDs are global, not per-session. ID 1 is the first message ever, not the first of this session. → ✅ Use discovery mode (`query=...`) first to find `match_message_id`, then scroll.
+
+11. ❌ **`patch` on `index.md` with only 2-3 context lines** → wikilinks look alike, patch matches wrong location, silently drops entries. → ✅ At least 5 lines of surrounding context. Afterward: always `read_file` the section to verify.
+
+### Deployment
+
+12. ❌ **Only copying `wiki_op.py` to production** (not the 6 module files) → `wiki_op.py stale/entities/search` etc. fail with ImportError. → ✅ Copy all `scripts/*.py` with `init-wiki.sh` or `cp scripts/*.py ~/wiki/.hermes/scripts/`.
+
+13. ❌ **Deploying script changes but not updating production** → sync checklist commands fail with "invalid choice" because old wiki_op.py is still in place. → ✅ After modifying skill `scripts/`, immediately `cp` to production wiki before running sync.
